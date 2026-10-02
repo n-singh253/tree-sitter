@@ -8,17 +8,19 @@ use std::{
 };
 
 use anstyle::{AnsiColor, Color, RgbColor};
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result};
 use clap::ValueEnum;
 use log::info;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tree_sitter::{
-    InputEdit, Language, LogType, ParseOptions, ParseState, Parser, Point, Range, Tree, TreeCursor,
-    ffi,
+    Language, LogType, ParseOptions, ParseState, Parser, Point, Range, Tree, TreeCursor, ffi,
 };
 
-use crate::{fuzz::edits::Edit, logger::paint, util};
+use crate::{logger::paint, util};
+
+pub mod edit;
+pub use edit::{offset_for_position, perform_edit, position_for_offset};
 
 #[derive(Debug, Default, Serialize, JsonSchema)]
 pub struct Stats {
@@ -445,13 +447,22 @@ pub fn parse_file_at_path(
         }
 
         let edit_time = Instant::now();
-        for (i, edit) in opts.edits.iter().enumerate() {
-            let edit = parse_edit_flag(&source_code, edit)?;
-            perform_edit(&mut tree, &mut source_code, &edit)?;
-            tree = parser.parse(&source_code, Some(&tree)).unwrap();
+        {
+            let mut edit_index = 0usize;
+            let total_edits = opts.edits.len();
+            while edit_index < total_edits {
+                let raw_flag = opts.edits[edit_index];
+                let parsed_flag = edit::parse_edit_flag(&source_code, raw_flag)?;
+                let _applied = edit::perform_edit(&mut tree, &mut source_code, &parsed_flag)?;
+                tree = parser.parse(&source_code, Some(&tree)).unwrap();
 
-            if opts.debug_graph {
-                info!("AFTER {i}:\n{}", String::from_utf8_lossy(&source_code));
+                if opts.debug_graph {
+                    info!(
+                        "AFTER {edit_index}:\n{}",
+                        String::from_utf8_lossy(&source_code)
+                    );
+                }
+                edit_index += 1;
             }
         }
         let edit_duration = edit_time.elapsed();
@@ -1035,114 +1046,4 @@ fn cst_render_node(
     writeln!(out)?;
 
     Ok(())
-}
-
-pub fn perform_edit(tree: &mut Tree, input: &mut Vec<u8>, edit: &Edit) -> Result<InputEdit> {
-    let start_byte = edit.position;
-    let old_end_byte = edit.position + edit.deleted_length;
-    let new_end_byte = edit.position + edit.inserted_text.len();
-    let start_position = position_for_offset(input, start_byte)?;
-    let old_end_position = position_for_offset(input, old_end_byte)?;
-    input.splice(start_byte..old_end_byte, edit.inserted_text.iter().copied());
-    let new_end_position = position_for_offset(input, new_end_byte)?;
-    let edit = InputEdit {
-        start_byte,
-        old_end_byte,
-        new_end_byte,
-        start_position,
-        old_end_position,
-        new_end_position,
-    };
-    tree.edit(&edit);
-    Ok(edit)
-}
-
-fn parse_edit_flag(source_code: &[u8], flag: &str) -> Result<Edit> {
-    let error = || {
-        anyhow!(
-            concat!(
-                "Invalid edit string '{}'. ",
-                "Edit strings must match the pattern '<START_BYTE_OR_POSITION> <REMOVED_LENGTH> <NEW_TEXT>'"
-            ),
-            flag
-        )
-    };
-
-    // Three whitespace-separated parts:
-    // * edit position
-    // * deleted length
-    // * inserted text
-    let mut parts = flag.split(' ');
-    let position = parts.next().ok_or_else(error)?;
-    let deleted_length = parts.next().ok_or_else(error)?;
-    let inserted_text = parts.collect::<Vec<_>>().join(" ").into_bytes();
-
-    // Position can either be a byte_offset or row,column pair, separated by a comma
-    let position = if position == "$" {
-        source_code.len()
-    } else if position.contains(',') {
-        let mut parts = position.split(',');
-        let row = parts.next().ok_or_else(error)?;
-        let row = row.parse::<usize>().map_err(|_| error())?;
-        let column = parts.next().ok_or_else(error)?;
-        let column = column.parse::<usize>().map_err(|_| error())?;
-        offset_for_position(source_code, Point { row, column })?
-    } else {
-        position.parse::<usize>().map_err(|_| error())?
-    };
-
-    // Deleted length must be a byte count.
-    let deleted_length = deleted_length.parse::<usize>().map_err(|_| error())?;
-
-    Ok(Edit {
-        position,
-        deleted_length,
-        inserted_text,
-    })
-}
-
-pub fn offset_for_position(input: &[u8], position: Point) -> Result<usize> {
-    let mut row = 0;
-    let mut offset = 0;
-    let mut iter = memchr::memchr_iter(b'\n', input);
-    loop {
-        if let Some(pos) = iter.next()
-            && row < position.row
-        {
-            row += 1;
-            offset = pos;
-            continue;
-        }
-        offset += 1;
-        break;
-    }
-    if position.row - row > 0 {
-        return Err(anyhow!("Failed to address a row: {}", position.row));
-    }
-    if let Some(pos) = iter.next() {
-        if (pos - offset < position.column) || (input[offset] == b'\n' && position.column > 0) {
-            return Err(anyhow!("Failed to address a column: {}", position.column));
-        }
-    } else if input.len() - offset < position.column {
-        return Err(anyhow!("Failed to address a column over the end"));
-    }
-    Ok(offset + position.column)
-}
-
-pub fn position_for_offset(input: &[u8], offset: usize) -> Result<Point> {
-    if offset > input.len() {
-        return Err(anyhow!("Failed to address an offset: {offset}"));
-    }
-    let mut result = Point { row: 0, column: 0 };
-    let mut last = 0;
-    for pos in memchr::memchr_iter(b'\n', &input[..offset]) {
-        result.row += 1;
-        last = pos;
-    }
-    result.column = if result.row > 0 {
-        offset - last - 1
-    } else {
-        offset
-    };
-    Ok(result)
 }

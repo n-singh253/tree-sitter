@@ -21,7 +21,7 @@ use tree_sitter_cli::{
     },
     highlight::{self, HighlightOptions},
     init::{JsonConfigOpts, TREE_SITTER_JSON_SCHEMA, generate_grammar_files},
-    input::{CliInput, get_input, get_tmp_source_file},
+    input::{self, CliInput, get_tmp_source_file},
     logger,
     parse::{self, ParseDebugType, ParseFileOptions, ParseOutput, ParseTheme},
     playground,
@@ -1151,7 +1151,7 @@ impl Parse {
         }
         let lib_info = get_lib_info(self.lib_path.as_ref(), self.lang_name.as_ref(), current_dir);
 
-        let input = get_input(
+        let input = input::get_input(
             self.paths_file.as_deref(),
             self.paths,
             self.test_number,
@@ -1566,7 +1566,7 @@ impl Query {
         }
         let lib_info = get_lib_info(self.lib_path.as_ref(), self.lang_name.as_ref(), current_dir);
 
-        let input = get_input(
+        let input = input::get_input(
             self.paths_file.as_deref(),
             self.paths,
             self.test_number,
@@ -1707,7 +1707,7 @@ impl Highlight {
             encoding,
         };
 
-        let input = get_input(
+        let input = input::get_input(
             self.paths_file.as_deref(),
             self.paths,
             self.test_number,
@@ -1856,7 +1856,7 @@ impl Tags {
             cancellation_flag: cancellation_flag.clone(),
         };
 
-        let input = get_input(
+        let input = input::get_input(
             self.paths_file.as_deref(),
             self.paths,
             self.test_number,

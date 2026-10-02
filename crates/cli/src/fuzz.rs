@@ -24,7 +24,7 @@ use crate::{
         edits::{get_random_edit, invert_edit},
         random::Rand,
     },
-    parse::perform_edit,
+    parse::edit::perform_edit,
     test::{DiffKey, TestDiff, TestEntry, parse_tests, strip_sexp_fields},
 };
 
